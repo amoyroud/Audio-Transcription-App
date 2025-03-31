@@ -1,0 +1,17 @@
+name = "insanely-fast-whisper"
+compatibility_date = "2024-03-31"
+
+[site]
+bucket = "./build"
+entry-point = "."
+
+[build]
+command = "npm run build"
+output_dir = "build"
+
+[env.production]
+name = "insanely-fast-whisper-prod"
+route = "audio.antoinemoyroud.com/*"
+
+[env.production.vars]
+REACT_APP_API_URL = "https://api.audio.antoinemoyroud.com" 

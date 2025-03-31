@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { useAuth } from './hooks/useAuth';
+import { Settings } from './components/Settings';
 import './App.css';
 
 function App() {
+  const { isAuthenticated, isLoading: authLoading, user, login, logout, getToken } = useAuth();
   const [file, setFile] = useState(null);
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
@@ -21,6 +24,8 @@ function App() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [estimatedSeconds, setEstimatedSeconds] = useState(0);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [mistralApiKey, setMistralApiKey] = useState(localStorage.getItem('mistralApiKey') || '');
 
   useEffect(() => {
     let timer;
@@ -28,10 +33,8 @@ function App() {
       timer = setInterval(() => {
         setElapsedSeconds(prev => {
           const newElapsed = prev + 1;
-          // Calculate progress based on elapsed time if we have estimated time
           if (estimatedSeconds > 0) {
             const calculatedProgress = Math.min((newElapsed / estimatedSeconds) * 100, 100);
-            // Only update progress if server hasn't sent a more accurate value
             if (calculatedProgress > progress) {
               setProgress(calculatedProgress);
             }
@@ -96,7 +99,12 @@ function App() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!file) return;
+    if (!file || !isAuthenticated || !mistralApiKey) {
+      if (!mistralApiKey) {
+        setIsSettingsOpen(true);
+      }
+      return;
+    }
 
     setIsLoading(true);
     setTranscription('');
@@ -118,9 +126,14 @@ function App() {
     formData.append('file', file);
 
     try {
+      const token = await getToken();
       const response = await fetch('http://localhost:8000/upload', {
         method: 'POST',
         body: formData,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-Mistral-Api-Key': mistralApiKey
+        }
       });
 
       if (!response.ok) {
@@ -156,8 +169,6 @@ function App() {
                   setEstimatedSeconds(data.estimatedSeconds);
                 }
                 if (data.progress !== undefined) {
-                  // Only update progress if it's been more than 1 second since last update
-                  // or if the progress is significantly different
                   const now = Date.now();
                   if (now - lastProgressUpdate > 1000 || Math.abs(data.progress - progress) > 2) {
                     setProgress(data.progress);
@@ -205,70 +216,64 @@ function App() {
     }
   };
 
-  return (
-    <div className="app-container">
-      <nav className="navbar">
-        <div className="logo">
-          <span className="logo-icon">🎙️</span>
-          <span className="logo-text">Whispr</span>
-        </div>
-      </nav>
+  const handleSettingsSave = (apiKey) => {
+    setMistralApiKey(apiKey);
+  };
 
-      <main className="main-content">
-        <div className="hero-section">
-          <h1>Audio Transcription & Summarization</h1>
-          <p className="subtitle">Transform your audio into text and insights in minutes</p>
-          
-          <div className="upload-container">
-            <form onSubmit={handleSubmit} className="upload-form">
-              <div className="file-input-wrapper">
-                <input
-                  type="file"
-                  onChange={handleFileChange}
-                  accept=".mp3,.wav,.m4a"
-                  id="file-upload"
-                  className="file-input"
-                />
-                <label htmlFor="file-upload" className="file-label">
-                  <span className="upload-icon">📁</span>
-                  {file ? file.name : 'Choose Audio File'}
-                </label>
+  return (
+    <div className="App">
+      <header className="App-header">
+        <h1>Audio Transcription & Summarization</h1>
+        <p>Transform your audio into text and insights in minutes</p>
+        
+        {authLoading ? (
+          <div className="auth-loading">Loading...</div>
+        ) : isAuthenticated && (
+          <div className="user-info">
+            {user?.picture && <img src={user.picture} alt={user.name} className="avatar" />}
+            <span>Welcome, {user?.name}</span>
+            <button onClick={() => setIsSettingsOpen(true)} className="settings-button">
+              ⚙️ Settings
+            </button>
+            <button onClick={logout} className="auth-button">Logout</button>
+          </div>
+        )}
+      </header>
+
+      <main className="content">
+        {isAuthenticated ? (
+          <>
+            {!mistralApiKey && (
+              <div className="api-key-prompt">
+                <p>Please set up your Mistral API key to use the transcription service</p>
+                <button onClick={() => setIsSettingsOpen(true)} className="auth-button">
+                  Configure API Key
+                </button>
               </div>
+            )}
+            
+            <div className="upload-section">
+              <input
+                type="file"
+                onChange={handleFileChange}
+                accept="audio/*"
+                className="file-input"
+                id="file-input"
+                style={{ display: 'none' }}
+              />
+              <label htmlFor="file-input" className="choose-file-button">
+                {file ? '✓ ' + file.name : '📁 Choose Audio File'}
+              </label>
               <button 
-                type="submit" 
+                onClick={handleSubmit}
+                disabled={!file || isLoading || !mistralApiKey}
                 className="upload-button"
-                disabled={!file || isLoading}
               >
                 {isLoading ? 'Processing...' : 'Upload & Process'}
               </button>
-            </form>
-          </div>
+            </div>
 
-          {isLoading && (
-            <div className="processing-container">
-              <div className="processing-header">
-                <div className="spinner-container">
-                  <div className="spinner"></div>
-                  <div className="timer">{formatTimeWithMillis(elapsedSeconds)}</div>
-                </div>
-                
-                {estimatedSeconds > 0 && (
-                  <div className="estimate-info">
-                    <div className="estimate-row">
-                      <span className="estimate-label">🎵 Audio Length:</span>
-                      <span className="estimate-value">{formatTime(audioDuration)}</span>
-                    </div>
-                    <div className="estimate-row">
-                      <span className="estimate-label">⏳ Est. Time:</span>
-                      <span className="estimate-value">{formatTime(estimatedSeconds)}</span>
-                    </div>
-                    <div className="progress-percentage">
-                      {progress.toFixed(1)}% Complete
-                    </div>
-                  </div>
-                )}
-              </div>
-
+            {isLoading && (
               <div className="progress-section">
                 <div className="progress-bar">
                   <div 
@@ -276,426 +281,64 @@ function App() {
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <div className="progress-details">
-                  <div className="status-line">
-                    {getPhaseEmoji(phase)} {status}
+                <div className="status">
+                  {getPhaseEmoji(phase)} {status}
+                  {loadingStep && ` ${getLoadingStepEmoji(loadingStep)}`}
+                </div>
+                {estimatedSeconds > 0 && (
+                  <div className="time-estimate">
+                    Elapsed: {formatTime(elapsedSeconds)} / Estimated: {formatTime(estimatedSeconds)}
                   </div>
-                  {phase === 'loading' && loadingStep && (
-                    <div className="loading-steps">
-                      {getLoadingStepEmoji(loadingStep)} {loadingStep}
+                )}
+              </div>
+            )}
+
+            {(transcription || summary) && (
+              <div className="results-section">
+                {transcription && (
+                  <div className="transcription">
+                    <h2>Transcription</h2>
+                    <div className="text-content">
+                      <ReactMarkdown>{transcription}</ReactMarkdown>
                     </div>
-                  )}
-                  {totalChunks > 0 && (
-                    <div className="chunk-info">
-                      <span>Chunk {currentChunk}/{totalChunks}</span>
-                      <span>{wordsProcessed} words</span>
+                  </div>
+                )}
+                
+                {summary && (
+                  <div className="summary">
+                    <h2>Summary</h2>
+                    <div className="text-content">
+                      <ReactMarkdown>{summary}</ReactMarkdown>
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+                  </div>
+                )}
 
-          {stats && (
-            <div className="results-container">
-              <div className="stats-section">
-                <h2>Processing Statistics</h2>
-                <div className="stats-grid">
-                  <div className="stat-card">
-                    <span className="stat-label">Total Time</span>
-                    <span className="stat-value">{formatTime(stats.totalTime)}</span>
+                {stats && (
+                  <div className="stats">
+                    <h3>Processing Stats</h3>
+                    <ul>
+                      <li>Audio Duration: {formatTimeWithMillis(audioDuration)}</li>
+                      <li>Words Processed: {wordsProcessed}</li>
+                      <li>Processing Time: {formatTime(elapsedSeconds)}</li>
+                    </ul>
                   </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Transcription</span>
-                    <span className="stat-value">{formatTime(stats.transcriptionTime)}</span>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Summary</span>
-                    <span className="stat-value">{formatTime(stats.summaryTime)}</span>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Words</span>
-                    <span className="stat-value">{stats.totalWords}</span>
-                  </div>
-                </div>
+                )}
               </div>
-
-              <div className="output-section">
-                <div className="transcription-container">
-                  <h2>Transcription</h2>
-                  <div className="transcription-content">
-                    {transcription}
-                  </div>
-                </div>
-
-                <div className="summary-container">
-                  <h2>Summary</h2>
-                  <div className="summary-content">
-                    <ReactMarkdown>{summary}</ReactMarkdown>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </>
+        ) : !authLoading && (
+          <div className="login-prompt">
+            <p>Please login to use the transcription service</p>
+            <button onClick={login} className="auth-button">Login to Start</button>
+          </div>
+        )}
       </main>
 
-      <style>{`
-        .app-container {
-          min-height: 100vh;
-          background: linear-gradient(135deg, #f5f7fa 0%, #e4e7eb 100%);
-          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
-
-        .navbar {
-          background: white;
-          padding: 1rem 2rem;
-          display: flex;
-          justify-content: flex-start;
-          align-items: center;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .logo {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-size: 1.5rem;
-          font-weight: 700;
-        }
-
-        .logo-icon {
-          font-size: 1.8rem;
-        }
-
-        .logo-text {
-          color: #1a202c;
-        }
-
-        .main-content {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 2rem;
-        }
-
-        .hero-section {
-          text-align: center;
-          padding: 3rem 0;
-        }
-
-        .hero-section h1 {
-          font-size: 2.5rem;
-          color: #1a202c;
-          margin-bottom: 1rem;
-        }
-
-        .subtitle {
-          font-size: 1.2rem;
-          color: #4a5568;
-          margin-bottom: 3rem;
-        }
-
-        .upload-container {
-          background: white;
-          padding: 2rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-          margin-bottom: 2rem;
-        }
-
-        .upload-form {
-          display: flex;
-          gap: 1rem;
-          justify-content: center;
-          align-items: center;
-        }
-
-        .file-input-wrapper {
-          position: relative;
-          flex: 1;
-          max-width: 400px;
-        }
-
-        .file-input {
-          display: none;
-        }
-
-        .file-label {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          padding: 0.75rem 1.5rem;
-          background: #f7fafc;
-          border: 2px dashed #cbd5e0;
-          border-radius: 8px;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-
-        .file-label:hover {
-          border-color: #4CAF50;
-          background: #f0fff4;
-        }
-
-        .upload-button {
-          padding: 0.75rem 1.5rem;
-          background: #4CAF50;
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-
-        .upload-button:hover {
-          background: #45a049;
-        }
-
-        .upload-button:disabled {
-          background: #9ca3af;
-          cursor: not-allowed;
-        }
-
-        .processing-container {
-          background: white;
-          padding: 2rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-          margin-top: 2rem;
-        }
-
-        .processing-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 2rem;
-          gap: 2rem;
-        }
-
-        .spinner-container {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 1rem;
-          min-width: 200px;
-        }
-
-        .spinner {
-          width: 60px;
-          height: 60px;
-          border: 4px solid #f3f3f3;
-          border-top: 4px solid #4CAF50;
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-
-        .timer {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 2rem;
-          font-weight: 700;
-          color: #4CAF50;
-          text-align: center;
-        }
-
-        .estimate-info {
-          background: #f8fafc;
-          padding: 1.5rem;
-          border-radius: 8px;
-          flex: 1;
-          min-width: 300px;
-        }
-
-        .estimate-row {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 0.75rem;
-          font-size: 1.1rem;
-        }
-
-        .estimate-label {
-          color: #64748b;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .estimate-value {
-          font-family: 'JetBrains Mono', monospace;
-          font-weight: 600;
-          color: #1e293b;
-        }
-
-        .progress-percentage {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 1.75rem;
-          font-weight: 700;
-          color: #4CAF50;
-          margin-top: 1.25rem;
-          text-align: center;
-        }
-
-        .progress-section {
-          background: #f8fafc;
-          padding: 1.5rem;
-          border-radius: 8px;
-        }
-
-        .progress-bar {
-          height: 8px;
-          background: #e2e8f0;
-          border-radius: 4px;
-          overflow: hidden;
-          margin-bottom: 1rem;
-        }
-
-        .progress-fill {
-          height: 100%;
-          background: linear-gradient(90deg, #4CAF50 0%, #8BC34A 100%);
-          transition: width 0.3s ease;
-        }
-
-        .progress-details {
-          color: #4a5568;
-        }
-
-        .status-line {
-          font-size: 1.1rem;
-          margin-bottom: 0.5rem;
-        }
-
-        .loading-steps {
-          font-size: 0.9rem;
-          color: #718096;
-          margin-bottom: 0.5rem;
-        }
-
-        .chunk-info {
-          display: flex;
-          justify-content: space-between;
-          font-size: 0.9rem;
-          color: #718096;
-        }
-
-        .results-container {
-          margin-top: 2rem;
-        }
-
-        .stats-section {
-          background: white;
-          padding: 2rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-          margin-bottom: 2rem;
-        }
-
-        .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-          gap: 1rem;
-          margin-top: 1.5rem;
-        }
-
-        .stat-card {
-          background: #f8fafc;
-          padding: 1.5rem;
-          border-radius: 8px;
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .stat-label {
-          color: #64748b;
-          font-size: 0.9rem;
-        }
-
-        .stat-value {
-          color: #1e293b;
-          font-size: 1.2rem;
-          font-weight: 600;
-        }
-
-        .output-section {
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 2rem;
-        }
-
-        .transcription-container,
-        .summary-container {
-          background: white;
-          padding: 2rem;
-          border-radius: 12px;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        .transcription-content,
-        .summary-content {
-          margin-top: 1rem;
-          line-height: 1.6;
-          color: #4a5568;
-          text-align: left;
-        }
-
-        .summary-content p {
-          margin-bottom: 1rem;
-        }
-
-        .summary-content ul, 
-        .summary-content ol {
-          margin-left: 1.5rem;
-          margin-bottom: 1rem;
-        }
-
-        .summary-content li {
-          margin-bottom: 0.5rem;
-        }
-
-        .summary-content h1,
-        .summary-content h2,
-        .summary-content h3,
-        .summary-content h4 {
-          margin-top: 1.5rem;
-          margin-bottom: 1rem;
-          color: #1a202c;
-          font-weight: 600;
-        }
-
-        .summary-content code {
-          background: #f1f5f9;
-          padding: 0.2rem 0.4rem;
-          border-radius: 4px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 0.9em;
-        }
-
-        .summary-content pre {
-          background: #f1f5f9;
-          padding: 1rem;
-          border-radius: 8px;
-          overflow-x: auto;
-          margin: 1rem 0;
-        }
-
-        .summary-content blockquote {
-          border-left: 4px solid #4CAF50;
-          padding-left: 1rem;
-          margin: 1rem 0;
-          color: #64748b;
-        }
-
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-
-        @media (min-width: 768px) {
-          .output-section {
-            grid-template-columns: 3fr 2fr;
-          }
-        }
-      `}</style>
+      <Settings 
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onSave={handleSettingsSave}
+      />
     </div>
   );
 }

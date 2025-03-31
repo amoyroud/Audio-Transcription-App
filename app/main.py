@@ -43,26 +43,40 @@ def init_whisper():
 # Initialize the transcription pipeline
 pipe = init_whisper()
 
-# Initialize Mistral client
-logger.info("Initializing Mistral client...")
-try:
-    http_client = httpx.Client(
-        base_url="https://api.mistral.ai/v1",
-        headers={"Authorization": f"Bearer {os.getenv('MISTRAL_API_KEY')}"}
-    )
-    client = OpenAI(
-        api_key=os.getenv("MISTRAL_API_KEY"),
-        base_url="https://api.mistral.ai/v1",
-        http_client=http_client
-    )
-    logger.info("Mistral client initialized successfully")
-except Exception as e:
-    logger.error(f"Error initializing Mistral client: {str(e)}")
-    raise
+def get_mistral_client(api_key):
+    """Initialize Mistral client with the provided API key"""
+    try:
+        http_client = httpx.Client(
+            base_url="https://api.mistral.ai/v1",
+            headers={"Authorization": f"Bearer {api_key}"}
+        )
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.mistral.ai/v1",
+            http_client=http_client
+        )
+        return client
+    except Exception as e:
+        logger.error(f"Error initializing Mistral client: {str(e)}")
+        raise
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
     logger.info("Received file upload request")
+    
+    # Get Mistral API key from header
+    mistral_api_key = request.headers.get('X-Mistral-Api-Key')
+    if not mistral_api_key:
+        logger.error("No Mistral API key provided")
+        return jsonify({'error': 'Mistral API key is required'}), 400
+    
+    # Initialize Mistral client with the provided API key
+    try:
+        mistral_client = get_mistral_client(mistral_api_key)
+    except Exception as e:
+        logger.error(f"Failed to initialize Mistral client: {str(e)}")
+        return jsonify({'error': 'Invalid Mistral API key'}), 400
+    
     if 'file' not in request.files:
         logger.error("No file part in request")
         return jsonify({'error': 'No file part'}), 400
@@ -220,7 +234,7 @@ def upload_file():
                 })}\n\n"
                 
                 # Generate summary using Mistral
-                summary = client.chat.completions.create(
+                summary = mistral_client.chat.completions.create(
                     model="mistral-large-latest",
                     messages=[
                         {"role": "system", "content": "You are a professional assistant that creates concise meeting notes and summaries from transcriptions. Focus on key points, action items, and important decisions."},
@@ -252,6 +266,15 @@ def upload_file():
                 logger.error(f"Error in generate function: {str(e)}")
                 yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                 raise
+
+            finally:
+                # Clean up temporary files
+                try:
+                    os.unlink(temp_file_path)
+                    if temp_file_path.endswith('.m4a'):
+                        os.unlink(temp_file_path.replace('.m4a', '.wav'))
+                except Exception as e:
+                    logger.error(f"Error cleaning up temporary files: {str(e)}")
 
         return Response(generate(), mimetype='text/event-stream')
 
