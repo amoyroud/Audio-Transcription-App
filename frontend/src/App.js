@@ -1,23 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { useAuth } from './hooks/useAuth';
-import { Settings } from './components/Settings';
+import { useAuth0 } from '@auth0/auth0-react';
 import './App.css';
+import Settings from './components/Settings';
 
 function App() {
-  const { isAuthenticated, isLoading: authLoading, user, login, logout, getToken } = useAuth();
+  const { isAuthenticated, loginWithRedirect, logout, user, isLoading: isAuthLoading, error } = useAuth0();
   const [file, setFile] = useState(null);
   const [transcription, setTranscription] = useState('');
   const [summary, setSummary] = useState('');
-  const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
-  const [currentChunk, setCurrentChunk] = useState(0);
-  const [totalChunks, setTotalChunks] = useState(0);
-  const [processingTime, setProcessingTime] = useState(0);
-  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState(0);
-  const [wordsProcessed, setWordsProcessed] = useState(0);
   const [phase, setPhase] = useState('');
   const [loadingStep, setLoadingStep] = useState('');
   const [stats, setStats] = useState(null);
@@ -28,316 +21,199 @@ function App() {
   const [mistralApiKey, setMistralApiKey] = useState(localStorage.getItem('mistralApiKey') || '');
 
   useEffect(() => {
-    let timer;
-    if (isLoading) {
-      timer = setInterval(() => {
-        setElapsedSeconds(prev => {
-          const newElapsed = prev + 1;
-          if (estimatedSeconds > 0) {
-            const calculatedProgress = Math.min((newElapsed / estimatedSeconds) * 100, 100);
-            if (calculatedProgress > progress) {
-              setProgress(calculatedProgress);
-            }
-          }
-          return newElapsed;
-        });
-      }, 1000);
-    } else {
-      setElapsedSeconds(0);
+    if (error) {
+      console.error('Auth0 Error:', error);
+      setStatus('Authentication Error: ' + error.message);
     }
-    return () => clearInterval(timer);
-  }, [isLoading, estimatedSeconds, progress]);
-
-  const formatTime = (seconds) => {
-    if (seconds < 60) {
-      return `${seconds.toFixed(1)} seconds`;
-    }
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = (seconds % 60).toFixed(1);
-    return `${minutes} min ${remainingSeconds} sec`;
-  };
-
-  const formatTimeWithMillis = (seconds) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.floor(seconds % 60);
-    const milliseconds = Math.floor((seconds % 1) * 100);
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
-  };
-
-  const getPhaseEmoji = (phase) => {
-    switch (phase) {
-      case 'init': return '🚀';
-      case 'loading': return '⚙️';
-      case 'transcribing': return '🎙️';
-      case 'summarizing': return '📝';
-      default: return '⏳';
-    }
-  };
-
-  const getLoadingStepEmoji = (step) => {
-    switch (step) {
-      case 'model': return '🧠';
-      case 'audio': return '🎵';
-      case 'config': return '⚡';
-      case 'complete': return '✅';
-      default: return '⚙️';
-    }
-  };
+  }, [error]);
 
   const handleFileChange = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      setFile(file);
-      setTranscription('');
-      setSummary('');
-      setStatus('');
-      setProgress(0);
-      setCurrentChunk(0);
-      setTotalChunks(0);
-    }
+    const selectedFile = event.target.files[0];
+    setFile(selectedFile);
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!file || !isAuthenticated || !mistralApiKey) {
-      if (!mistralApiKey) {
-        setIsSettingsOpen(true);
-      }
-      return;
-    }
+    if (!file) return;
 
     setIsLoading(true);
+    setProgress(0);
     setTranscription('');
     setSummary('');
-    setProgress(0);
-    setCurrentChunk(0);
-    setTotalChunks(0);
-    setProcessingTime(0);
-    setEstimatedTimeRemaining(0);
-    setWordsProcessed(0);
+    setStatus('');
     setPhase('');
     setLoadingStep('');
     setStats(null);
-    setAudioDuration(0);
-    setEstimatedSeconds(0);
     setElapsedSeconds(0);
-
-    const formData = new FormData();
-    formData.append('file', file);
+    setEstimatedSeconds(0);
 
     try {
-      const token = await getToken();
-      const response = await fetch('http://localhost:8000/upload', {
+      setIsLoading(true);
+      setTranscription(null);
+      setSummary(null);
+
+      // Log all environment variables
+      console.log('All env variables:', process.env);
+      console.log('API URL from env:', process.env.REACT_APP_API_URL);
+      
+      // Force the correct API URL
+      const apiUrl = 'https://api.audio.antoinemoyroud.com/upload';
+      console.log('Final API URL:', apiUrl);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mistralApiKey', mistralApiKey);
+
+      const requestOptions = {
         method: 'POST',
         body: formData,
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'X-Mistral-Api-Key': mistralApiKey
+          'X-Mistral-Api-Key': mistralApiKey,
+          'Accept': 'application/json'
         }
-      });
+      };
+      console.log('Request options:', requestOptions);
+
+      const response = await fetch(apiUrl, requestOptions);
+      console.log('Response status:', response.status);
+      console.log('Response type:', response.type);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
       if (!response.ok) {
-        throw new Error('Upload failed');
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let lastProgressUpdate = Date.now();
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              
-              if (data.type === 'progress') {
-                setStatus(data.text);
-                setPhase(data.phase || '');
-                if (data.step !== undefined) {
-                  setLoadingStep(data.step);
-                }
-                if (data.audioDuration !== undefined) {
-                  setAudioDuration(data.audioDuration);
-                }
-                if (data.estimatedSeconds !== undefined) {
-                  setEstimatedSeconds(data.estimatedSeconds);
-                }
-                if (data.progress !== undefined) {
-                  const now = Date.now();
-                  if (now - lastProgressUpdate > 1000 || Math.abs(data.progress - progress) > 2) {
-                    setProgress(data.progress);
-                    lastProgressUpdate = now;
-                  }
-                }
-                if (data.currentChunk !== undefined) {
-                  setCurrentChunk(data.currentChunk);
-                }
-                if (data.totalChunks !== undefined) {
-                  setTotalChunks(data.totalChunks);
-                }
-                if (data.processingTime !== undefined) {
-                  setProcessingTime(data.processingTime);
-                }
-                if (data.estimatedTimeRemaining !== undefined) {
-                  setEstimatedTimeRemaining(data.estimatedTimeRemaining);
-                }
-                if (data.wordsProcessed !== undefined) {
-                  setWordsProcessed(data.wordsProcessed);
-                }
-              } else if (data.type === 'result') {
-                setTranscription(data.transcription || '');
-                setSummary(data.summary || '');
-                setStats(data.stats || null);
-                setStatus('Processing complete!');
-                setIsLoading(false);
-              } else if (data.type === 'error') {
-                setError(data.error);
-                setStatus(`Error: ${data.error}`);
-                setIsLoading(false);
-              }
-            } catch (error) {
-              console.error('Error parsing server response:', error);
-              setStatus('Error processing server response');
-              setIsLoading(false);
-            }
-          }
-        }
-      }
+      const data = await response.json();
+      console.log('Response data:', data);
+      setTranscription(data.transcription);
+      setSummary(data.summary);
+      setStats(data.stats);
     } catch (error) {
       console.error('Error:', error);
-      setStatus(`Error: ${error.message}`);
+      setStatus('Error: ' + error.message);
+    } finally {
       setIsLoading(false);
     }
   };
 
-  const handleSettingsSave = (apiKey) => {
-    setMistralApiKey(apiKey);
+  const handleLogout = () => {
+    // Clear any stored data
+    localStorage.removeItem('mistralApiKey');
+    setMistralApiKey('');
+    setFile(null);
+    setTranscription('');
+    setSummary('');
+    setStats(null);
+    // Call Auth0 logout
+    logout({ 
+      logoutParams: {
+        returnTo: process.env.NODE_ENV === 'production'
+          ? 'https://audio.antoinemoyroud.com'
+          : 'http://localhost:3001'
+      }
+    });
   };
 
   return (
     <div className="App">
       <header className="App-header">
-        <h1>Audio Transcription & Summarization</h1>
-        <p>Transform your audio into text and insights in minutes</p>
-        
-        {authLoading ? (
-          <div className="auth-loading">Loading...</div>
-        ) : isAuthenticated && (
-          <div className="user-info">
-            {user?.picture && <img src={user.picture} alt={user.name} className="avatar" />}
-            <span>Welcome, {user?.name}</span>
-            <button onClick={() => setIsSettingsOpen(true)} className="settings-button">
-              ⚙️ Settings
-            </button>
-            <button onClick={logout} className="auth-button">Logout</button>
+        <h1>Audio Transcription App</h1>
+        {isAuthLoading ? (
+          <div className="loading-container">
+            <p>Loading...</p>
           </div>
-        )}
-      </header>
-
-      <main className="content">
-        {isAuthenticated ? (
+        ) : isAuthenticated ? (
           <>
-            {!mistralApiKey && (
-              <div className="api-key-prompt">
-                <p>Please set up your Mistral API key to use the transcription service</p>
-                <button onClick={() => setIsSettingsOpen(true)} className="auth-button">
-                  Configure API Key
-                </button>
-              </div>
-            )}
-            
-            <div className="upload-section">
-              <input
-                type="file"
-                onChange={handleFileChange}
-                accept="audio/*"
-                className="file-input"
-                id="file-input"
-                style={{ display: 'none' }}
-              />
-              <label htmlFor="file-input" className="choose-file-button">
-                {file ? '✓ ' + file.name : '📁 Choose Audio File'}
-              </label>
-              <button 
-                onClick={handleSubmit}
-                disabled={!file || isLoading || !mistralApiKey}
-                className="upload-button"
-              >
-                {isLoading ? 'Processing...' : 'Upload & Process'}
+            <div className="user-info">
+              <img src={user.picture} alt={user.name} className="avatar" />
+              <span>Welcome, {user.name}</span>
+              <button onClick={handleLogout} className="auth-button">
+                Log Out
               </button>
             </div>
-
+            <div className="settings-container">
+              <button onClick={() => setIsSettingsOpen(true)} className="settings-button">
+                {mistralApiKey ? 'Update API Key' : 'Set API Key'}
+              </button>
+            </div>
+            {!mistralApiKey ? (
+              <div className="api-key-warning">
+                <p>Please set your Mistral API key in Settings before uploading files.</p>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="upload-form">
+                <input
+                  type="file"
+                  onChange={handleFileChange}
+                  accept="audio/*"
+                  className="file-input"
+                />
+                <button type="submit" disabled={!file || isLoading} className="submit-button">
+                  {isLoading ? 'Processing...' : 'Upload & Transcribe'}
+                </button>
+              </form>
+            )}
             {isLoading && (
-              <div className="progress-section">
+              <div className="loading-container">
                 <div className="progress-bar">
-                  <div 
+                  <div
                     className="progress-fill"
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <div className="status">
-                  {getPhaseEmoji(phase)} {status}
-                  {loadingStep && ` ${getLoadingStepEmoji(loadingStep)}`}
-                </div>
-                {estimatedSeconds > 0 && (
-                  <div className="time-estimate">
-                    Elapsed: {formatTime(elapsedSeconds)} / Estimated: {formatTime(estimatedSeconds)}
-                  </div>
-                )}
+                <p className="status-text">{status}</p>
+                <p className="phase-text">{phase}</p>
+                <p className="step-text">{loadingStep}</p>
               </div>
             )}
-
-            {(transcription || summary) && (
-              <div className="results-section">
-                {transcription && (
-                  <div className="transcription">
-                    <h2>Transcription</h2>
-                    <div className="text-content">
-                      <ReactMarkdown>{transcription}</ReactMarkdown>
-                    </div>
-                  </div>
-                )}
-                
+            {transcription && (
+              <div className="results-container">
+                <div className="transcription-container">
+                  <h2>Transcription</h2>
+                  <p>{transcription}</p>
+                </div>
                 {summary && (
-                  <div className="summary">
+                  <div className="summary-container">
                     <h2>Summary</h2>
-                    <div className="text-content">
-                      <ReactMarkdown>{summary}</ReactMarkdown>
-                    </div>
+                    <p>{summary}</p>
                   </div>
                 )}
-
                 {stats && (
-                  <div className="stats">
-                    <h3>Processing Stats</h3>
-                    <ul>
-                      <li>Audio Duration: {formatTimeWithMillis(audioDuration)}</li>
-                      <li>Words Processed: {wordsProcessed}</li>
-                      <li>Processing Time: {formatTime(elapsedSeconds)}</li>
-                    </ul>
+                  <div className="stats-container">
+                    <h3>Statistics</h3>
+                    <p>Processing Time: {stats.processing_time.toFixed(2)} seconds</p>
+                    <p>Audio Duration: {stats.audio_duration.toFixed(2)} seconds</p>
                   </div>
                 )}
               </div>
             )}
           </>
-        ) : !authLoading && (
-          <div className="login-prompt">
-            <p>Please login to use the transcription service</p>
-            <button onClick={login} className="auth-button">Login to Start</button>
+        ) : (
+          <div className="login-container">
+            <p>Please log in to use the application</p>
+            <button 
+              onClick={() => loginWithRedirect({
+                appState: { returnTo: window.location.pathname }
+              })} 
+              className="auth-button"
+            >
+              Log In
+            </button>
           </div>
         )}
-      </main>
-
-      <Settings 
+      </header>
+      <Settings
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onSave={handleSettingsSave}
+        apiKey={mistralApiKey}
+        onSave={(key) => {
+          setMistralApiKey(key);
+          localStorage.setItem('mistralApiKey', key);
+          setIsSettingsOpen(false);
+        }}
       />
     </div>
   );

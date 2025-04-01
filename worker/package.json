@@ -1,7 +1,7 @@
 {
   "name": "insanely-fast-whisper-worker",
   "version": "0.1.0",
-  "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"
@@ -13,6 +13,6 @@
     "mustache": "^4.2.0"
   },
   "devDependencies": {
-    "wrangler": "^3.30.1"
+    "wrangler": "^4.6.0"
   }
 }
