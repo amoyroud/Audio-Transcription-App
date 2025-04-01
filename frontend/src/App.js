@@ -75,7 +75,16 @@ function App() {
 
       reader.onload = async (e) => {
         try {
+          console.log('Original file size:', file.size, 'bytes');
+          console.log('Original file type:', file.type);
+          
           const audioBuffer = await audioContext.decodeAudioData(e.target.result);
+          console.log('Decoded audio buffer:', {
+            duration: audioBuffer.duration,
+            numberOfChannels: audioBuffer.numberOfChannels,
+            sampleRate: audioBuffer.sampleRate,
+            length: audioBuffer.length
+          });
           
           // Create offline context for processing
           const offlineContext = new OfflineAudioContext(
@@ -90,17 +99,33 @@ function App() {
           source.connect(offlineContext.destination);
 
           // Process audio
+          console.log('Starting audio processing...');
           const renderedBuffer = await offlineContext.startRendering();
+          console.log('Rendered buffer:', {
+            duration: renderedBuffer.duration,
+            numberOfChannels: renderedBuffer.numberOfChannels,
+            sampleRate: renderedBuffer.sampleRate,
+            length: renderedBuffer.length
+          });
           
           // Convert to WAV
           const wavBlob = await audioBufferToWav(renderedBuffer);
+          console.log('Final WAV blob:', {
+            size: wavBlob.size,
+            type: wavBlob.type
+          });
+          
           resolve(wavBlob);
         } catch (error) {
+          console.error('Error in audio preprocessing:', error);
           reject(error);
         }
       };
 
-      reader.onerror = reject;
+      reader.onerror = (error) => {
+        console.error('Error reading file:', error);
+        reject(error);
+      };
       reader.readAsArrayBuffer(file);
     });
   };

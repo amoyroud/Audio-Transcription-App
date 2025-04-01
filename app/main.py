@@ -82,6 +82,8 @@ def upload_file():
         return jsonify({'error': 'No file part'}), 400
     
     file = request.files['file']
+    logger.info(f"Received file: {file.filename}, Content-Type: {file.content_type}")
+    
     if not file.filename.endswith(('.mp3', '.wav', '.m4a')):
         logger.error(f"Invalid file type: {file.filename}")
         return jsonify({'error': 'Only audio files are allowed'}), 400
@@ -95,6 +97,10 @@ def upload_file():
             file.save(temp_file.name)
             temp_file_path = temp_file.name
             logger.info(f"File saved temporarily at: {temp_file_path}")
+            
+            # Log file size
+            file_size = os.path.getsize(temp_file_path)
+            logger.info(f"Temporary file size: {file_size} bytes")
 
         # Convert M4A to WAV if necessary
         if file.filename.endswith('.m4a'):
@@ -126,12 +132,15 @@ def upload_file():
                 # Get audio duration using ffprobe
                 duration_cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 {temp_file_path}"
                 audio_duration = float(subprocess.check_output(duration_cmd.split()).decode().strip())
+                logger.info(f"Audio duration: {audio_duration} seconds")
                 
                 # Calculate estimated processing time
                 chunk_size_seconds = 15  # chunk length in seconds
                 batch_size = 16
                 total_chunks = math.ceil(audio_duration / chunk_size_seconds)
                 total_batches = math.ceil(total_chunks / batch_size)
+                
+                logger.info(f"Processing configuration: chunk_size={chunk_size_seconds}s, batch_size={batch_size}, total_chunks={total_chunks}, total_batches={total_batches}")
                 
                 # Based on performance metrics, each batch takes ~20 seconds to process
                 seconds_per_batch = 20
@@ -167,6 +176,8 @@ def upload_file():
                     return_timestamps=True,
                 )
                 
+                logger.info(f"Whisper pipeline outputs: {outputs}")
+                
                 # Log completion of loading phase
                 yield f"data: {json.dumps({'type': 'progress', 'text': 'Model and audio preparation complete. Starting transcription...', 'phase': 'loading', 'step': 'complete'})}\n\n"
                 
@@ -183,6 +194,9 @@ def upload_file():
                     current_time = time.time() - chunk_start_time
                     avg_time_per_chunk = current_time / i
                     estimated_remaining = avg_time_per_chunk * (total_chunks - i)
+                    
+                    # Log chunk details
+                    logger.info(f"Chunk {i}/{total_chunks}: {chunk['text'].strip()}")
                     
                     # Only accumulate text for non-empty chunks
                     if chunk["text"].strip():
