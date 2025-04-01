@@ -20,6 +20,19 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [mistralApiKey, setMistralApiKey] = useState(localStorage.getItem('mistralApiKey') || '');
 
+  // Timer effect
+  useEffect(() => {
+    let timer;
+    if (isLoading) {
+      timer = setInterval(() => {
+        setElapsedSeconds(prev => prev + 1);
+      }, 1000);
+    } else {
+      setElapsedSeconds(0);
+    }
+    return () => clearInterval(timer);
+  }, [isLoading]);
+
   useEffect(() => {
     if (error) {
       console.error('Auth0 Error:', error);
@@ -30,6 +43,16 @@ function App() {
   const handleFileChange = (event) => {
     const selectedFile = event.target.files[0];
     setFile(selectedFile);
+    
+    // Get audio duration
+    if (selectedFile) {
+      const audio = new Audio(URL.createObjectURL(selectedFile));
+      audio.addEventListener('loadedmetadata', () => {
+        setAudioDuration(audio.duration);
+        // Estimate processing time (rough estimate: 2x audio duration)
+        setEstimatedSeconds(audio.duration * 2);
+      });
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -45,12 +68,14 @@ function App() {
     setLoadingStep('');
     setStats(null);
     setElapsedSeconds(0);
-    setEstimatedSeconds(0);
+    setEstimatedSeconds(audioDuration * 2);
 
     try {
       setIsLoading(true);
       setTranscription(null);
       setSummary(null);
+      setPhase('Uploading');
+      setLoadingStep('Preparing file...');
 
       // Log all environment variables
       console.log('All env variables:', process.env);
@@ -75,6 +100,10 @@ function App() {
       };
       console.log('Request options:', requestOptions);
 
+      setPhase('Processing');
+      setLoadingStep('Transcribing audio...');
+      setProgress(30);
+
       const response = await fetch(apiUrl, requestOptions);
       console.log('Response status:', response.status);
       console.log('Response type:', response.type);
@@ -86,14 +115,22 @@ function App() {
         throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
       }
 
+      setLoadingStep('Generating summary...');
+      setProgress(70);
+
       const data = await response.json();
       console.log('Response data:', data);
       setTranscription(data.transcription);
       setSummary(data.summary);
       setStats(data.stats);
+      setProgress(100);
+      setPhase('Complete');
+      setLoadingStep('Done!');
     } catch (error) {
       console.error('Error:', error);
       setStatus('Error: ' + error.message);
+      setPhase('Error');
+      setLoadingStep('Failed');
     } finally {
       setIsLoading(false);
     }
@@ -115,6 +152,12 @@ function App() {
           : 'http://localhost:3001'
       }
     });
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -163,6 +206,10 @@ function App() {
                     className="progress-fill"
                     style={{ width: `${progress}%` }}
                   ></div>
+                </div>
+                <div className="timer-container">
+                  <p>Elapsed Time: {formatTime(elapsedSeconds)}</p>
+                  <p>Estimated Time Remaining: {formatTime(Math.max(0, estimatedSeconds - elapsedSeconds))}</p>
                 </div>
                 <p className="status-text">{status}</p>
                 <p className="phase-text">{phase}</p>
