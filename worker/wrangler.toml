@@ -12,4 +12,7 @@ custom_domain = true
 
 [env.production]
 name = "insanely-fast-whisper-api"
-route = "api.audio.antoinemoyroud.com/*" 
+route = "api.audio.antoinemoyroud.com/*"
+
+[observability.logs]
+enabled = true 
