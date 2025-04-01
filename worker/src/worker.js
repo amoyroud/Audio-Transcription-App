@@ -47,8 +47,44 @@ const splitAudioIntoChunks = (audioData, chunkSize = 30, overlap = 1) => {
   const overlapSamples = overlap * sampleRate;
   const chunks = [];
   
-  for (let i = 0; i < audioData.length; i += samplesPerChunk - overlapSamples) {
-    chunks.push(audioData.slice(i, i + samplesPerChunk));
+  // Validate input
+  if (!audioData || audioData.length === 0) {
+    console.error('Invalid audio data provided to splitAudioIntoChunks');
+    return [];
+  }
+
+  // Log chunk size details
+  console.log('Chunk configuration:', {
+    sampleRate,
+    chunkSize,
+    overlap,
+    samplesPerChunk,
+    overlapSamples,
+    totalSamples: audioData.length
+  });
+
+  // Calculate optimal chunk size based on audio length
+  const minChunkSize = 5 * sampleRate; // 5 seconds minimum
+  const maxChunks = Math.ceil(audioData.length / (minChunkSize - overlapSamples));
+  const adjustedSamplesPerChunk = Math.max(
+    minChunkSize,
+    Math.ceil(audioData.length / maxChunks) + overlapSamples
+  );
+
+  console.log('Adjusted chunk size:', {
+    minChunkSize,
+    maxChunks,
+    adjustedSamplesPerChunk
+  });
+  
+  for (let i = 0; i < audioData.length; i += adjustedSamplesPerChunk - overlapSamples) {
+    const chunk = audioData.slice(i, i + adjustedSamplesPerChunk);
+    
+    // Only add non-empty chunks
+    if (chunk.length > 0) {
+      chunks.push(chunk);
+      console.log(`Created chunk ${chunks.length}: ${chunk.length} samples`);
+    }
   }
   
   return chunks;
@@ -57,12 +93,38 @@ const splitAudioIntoChunks = (audioData, chunkSize = 30, overlap = 1) => {
 // Helper function to process a single chunk
 const processChunk = async (ai, chunk, chunkIndex) => {
   try {
+    console.log(`Processing chunk ${chunkIndex}, size: ${chunk.length} bytes`);
+    
+    // Ensure chunk is valid
+    if (!chunk || chunk.length === 0) {
+      console.error(`Invalid chunk ${chunkIndex}: empty or null`);
+      return {
+        index: chunkIndex,
+        error: 'Invalid chunk: empty or null',
+        success: false
+      };
+    }
+
+    // Process the chunk
     const result = await ai.run('@cf/openai/whisper', {
-      audio: Array.from(chunk)
+      audio: Array.from(chunk),
+      language: 'en'  // Explicitly set language
     });
+
+    console.log(`Chunk ${chunkIndex} processed successfully:`, result);
+
+    if (!result || !result.text) {
+      console.error(`Invalid result for chunk ${chunkIndex}:`, result);
+      return {
+        index: chunkIndex,
+        error: 'Invalid result from Whisper API',
+        success: false
+      };
+    }
+
     return {
       index: chunkIndex,
-      text: result.text,
+      text: result.text.trim(),
       success: true
     };
   } catch (error) {
@@ -102,9 +164,19 @@ app.post('/upload', async (c) => {
     const audioData = new Uint8Array(arrayBuffer);
     console.log('Audio data length:', audioData.length);
 
+    if (audioData.length === 0) {
+      console.error('Empty audio data');
+      return c.json({ error: 'Empty audio file' }, 400);
+    }
+
     // Split audio into chunks
     const chunks = splitAudioIntoChunks(audioData);
     console.log('Split audio into chunks:', chunks.length);
+
+    if (chunks.length === 0) {
+      console.error('No chunks generated');
+      return c.json({ error: 'Failed to split audio into chunks' }, 400);
+    }
 
     // Process chunks in parallel with a limit of 3 concurrent chunks
     const chunkResults = [];
@@ -123,6 +195,16 @@ app.post('/upload', async (c) => {
       console.log(`Processed ${chunkResults.length} of ${chunks.length} chunks`);
     }
 
+    // Check if any chunks were processed successfully
+    const successfulChunks = chunkResults.filter(result => result.success);
+    if (successfulChunks.length === 0) {
+      console.error('No chunks were processed successfully');
+      return c.json({ 
+        error: 'Failed to process any audio chunks',
+        details: chunkResults.map(r => r.error).filter(Boolean)
+      }, 500);
+    }
+
     // Combine results in order
     const transcription = chunkResults
       .sort((a, b) => a.index - b.index)
@@ -130,6 +212,11 @@ app.post('/upload', async (c) => {
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();
+
+    if (!transcription) {
+      console.error('Empty transcription after processing');
+      return c.json({ error: 'Failed to generate transcription' }, 500);
+    }
 
     // Generate summary using Mistral
     console.log('Starting summary generation');
