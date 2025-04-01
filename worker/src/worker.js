@@ -4,6 +4,12 @@ import { cors } from 'hono/cors';
 
 const app = new Hono();
 
+// Initialize AI binding in the request context
+app.use('/*', async (c, next) => {
+  c.ai = new Ai(c.env.AI);
+  await next();
+});
+
 // CORS configuration
 app.use('/*', cors({
   origin: ['https://audio.antoinemoyroud.com', 'http://localhost:3001'],
@@ -34,77 +40,102 @@ app.options('/*', async (c) => {
 // Health check endpoint
 app.get('/', (c) => c.json({ status: 'ok' }));
 
+// Helper function to split audio into chunks
+const splitAudioIntoChunks = (audioData, chunkSize = 30, overlap = 1) => {
+  const sampleRate = 16000; // 16kHz
+  const samplesPerChunk = chunkSize * sampleRate;
+  const overlapSamples = overlap * sampleRate;
+  const chunks = [];
+  
+  for (let i = 0; i < audioData.length; i += samplesPerChunk - overlapSamples) {
+    chunks.push(audioData.slice(i, i + samplesPerChunk));
+  }
+  
+  return chunks;
+};
+
+// Helper function to process a single chunk
+const processChunk = async (ai, chunk, chunkIndex) => {
+  try {
+    const result = await ai.run('@cf/openai/whisper', {
+      audio: Array.from(chunk)
+    });
+    return {
+      index: chunkIndex,
+      text: result.text,
+      success: true
+    };
+  } catch (error) {
+    console.error(`Error processing chunk ${chunkIndex}:`, error);
+    return {
+      index: chunkIndex,
+      error: error.message,
+      success: false
+    };
+  }
+};
+
 // Upload endpoint
 app.post('/upload', async (c) => {
   try {
-    console.log('Processing upload request');
-    const mistralApiKey = c.req.header('X-Mistral-Api-Key');
-    if (!mistralApiKey) {
-      console.log('Missing Mistral API key');
-      return c.json({ error: 'Mistral API key is required' }, 401);
-    }
-
+    console.log('Received upload request');
     const formData = await c.req.formData();
     const file = formData.get('file');
-    
+    const mistralApiKey = formData.get('mistralApiKey');
+
     if (!file) {
-      console.log('No file provided');
+      console.error('No file provided');
       return c.json({ error: 'No file provided' }, 400);
     }
 
-    console.log('File received:', {
+    console.log('File details:', {
       name: file.name,
       type: file.type,
       size: file.size
     });
 
-    // Convert the file to an ArrayBuffer
+    // Convert file to ArrayBuffer
     const arrayBuffer = await file.arrayBuffer();
     console.log('ArrayBuffer size:', arrayBuffer.byteLength);
-    console.log('ArrayBuffer type:', typeof arrayBuffer);
-    
-    // Initialize the AI model
-    const ai = new Ai(c.env.AI);
-    console.log('AI model initialized');
 
-    // Transcribe the audio using Whisper
-    console.log('Starting transcription');
-    
-    // Convert ArrayBuffer to array of integers (0-255)
-    const audioData = Array.from(new Uint8Array(arrayBuffer));
+    // Convert ArrayBuffer to array of integers
+    const audioData = new Uint8Array(arrayBuffer);
     console.log('Audio data length:', audioData.length);
-    console.log('Audio data sample:', audioData.slice(0, 10));
 
-    const whisperInput = {
-      audio: audioData
-    };
-    console.log('Whisper input structure:', JSON.stringify({
-      ...whisperInput,
-      audio: {
-        length: audioData.length,
-        sample: audioData.slice(0, 10)
-      }
-    }, null, 2));
+    // Split audio into chunks
+    const chunks = splitAudioIntoChunks(audioData);
+    console.log('Split audio into chunks:', chunks.length);
 
-    let transcription;
-    try {
-      transcription = await ai.run('@cf/openai/whisper', whisperInput);
-      console.log('Transcription successful:', transcription);
-    } catch (whisperError) {
-      console.error('Whisper API error:', whisperError);
-      console.error('Whisper error details:', {
-        name: whisperError.name,
-        message: whisperError.message,
-        stack: whisperError.stack
-      });
-      return c.json({ error: `Whisper API error: ${whisperError.message}` }, 500);
+    // Process chunks in parallel with a limit of 3 concurrent chunks
+    const chunkResults = [];
+    const maxConcurrent = 3;
+    
+    for (let i = 0; i < chunks.length; i += maxConcurrent) {
+      const chunkBatch = chunks.slice(i, i + maxConcurrent);
+      const batchPromises = chunkBatch.map((chunk, index) => 
+        processChunk(c.ai, chunk, i + index)
+      );
+      
+      const batchResults = await Promise.all(batchPromises);
+      chunkResults.push(...batchResults);
+      
+      // Log progress
+      console.log(`Processed ${chunkResults.length} of ${chunks.length} chunks`);
     }
+
+    // Combine results in order
+    const transcription = chunkResults
+      .sort((a, b) => a.index - b.index)
+      .map(result => result.success ? result.text : '')
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     // Generate summary using Mistral
     console.log('Starting summary generation');
     let summary;
     try {
-      summary = await ai.run('@cf/mistral/mistral-7b-instruct-v0.1', {
+      summary = await c.ai.run('@cf/mistral/mistral-7b-instruct-v0.1', {
         messages: [
           {
             role: 'system',
@@ -112,7 +143,7 @@ app.post('/upload', async (c) => {
           },
           {
             role: 'user',
-            content: `Please summarize this transcription: ${transcription.text}`
+            content: `Please summarize this transcription: ${transcription}`
           }
         ],
         stream: false,
@@ -123,27 +154,26 @@ app.post('/upload', async (c) => {
       console.log('Summary generation successful');
     } catch (mistralError) {
       console.error('Mistral API error:', mistralError);
-      // Return just the transcription if Mistral fails
       return c.json({ 
-        transcription: transcription.text,
+        transcription,
         error: `Mistral API error: ${mistralError.message}` 
-      }, 200); // Changed to 200 since we still have a valid transcription
+      }, 200);
     }
 
     console.log('Processing complete');
-    // Return the results
     return c.json({
-      transcription: transcription.text,
+      transcription,
       summary: summary.response,
       stats: {
         processing_time: 0,
-        audio_duration: 0
+        audio_duration: audioData.length / 16000 // Approximate duration in seconds
       }
     });
-
   } catch (error) {
-    console.error('Error processing audio:', error);
-    return c.json({ error: error.message }, 500);
+    console.error('Unexpected error:', error);
+    return c.json({ 
+      error: `Unexpected error: ${error.message}` 
+    }, 500);
   }
 });
 

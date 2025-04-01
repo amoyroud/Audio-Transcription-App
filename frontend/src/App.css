@@ -140,6 +140,14 @@
   color: #666;
 }
 
+.chunk-text {
+  font-size: 0.9rem;
+  color: #4CAF50;
+  font-weight: 500;
+  margin: 0.5rem 0;
+  font-family: monospace;
+}
+
 .results-container {
   max-width: 800px;
   margin: 0 auto;
